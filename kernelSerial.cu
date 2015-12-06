@@ -16,28 +16,22 @@ using namespace std;
 #define CPU_DEPTH_LIMIT 3
 #define CPU_END_LIMIT 8 //when we have this many or less open spaces on the board, just let the CPU go all the way to the end without launching kernels
 
-enum Type { BLUE, GREEN, OPEN };
 enum gameMode {AI, HUMAN, DOUBLE_HUMAN};
 
+int values[GAME_DIMENSION][GAME_DIMENSION]; //constant array of gameboard values which is filled based on selected map
+
 /*holds data for each block on the gameboard*/
-struct block
-{
-	int value;
-	Type team;
-};
+char team; // 'o' for open, 'b' for blue, 'g' for green team
+
 /*function declarations*/
 void setup_game(int x);
 void output_game(string filename);
 void play_game();
-int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x, int& y);
-int min_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x, int& y);
+int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y);
+int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y);
 
-block** game;  //pointer to array of gameboard blocks
-int blue_expanded = 0; //keeps track of total expanded nodes by blue
-int green_expanded = 0; //keeps track of total expanded nodes by green
-int blue_number_moves = 0;
-int green_number_moves = 0;
-float average_number_moves;
+char** game;  //pointer to gameboard
+
 int blue_score = 0;
 int green_score = 0;
 double blue_time = 0;
@@ -100,14 +94,11 @@ void setup_game(int x)
 	{
 		for (int j = 0; j < GAME_DIMENSION; j++)
 		{
-			game[i][j].value = gameboard[x][i][j];
-			game[i][j].team = OPEN;
+			values[i][j] = gameboard[x][i][j]; //set values
+			game[i][j] = 'o';
 		}
 	}
-	blue_expanded = 0;
-	green_expanded = 0;
-	blue_number_moves = 0;
-	green_number_moves = 0;
+
 	blue_time = 0;
 	green_time = 0;
 	blue_score = 0;
@@ -122,15 +113,8 @@ void output_game(string filename)
 	ofstream outFile(filename.c_str());
 	if (outFile.is_open())
 	{
-
-		outFile << "Player Blue expanded " << blue_expanded << " nodes" << endl;
-		outFile << "Player Green expanded " << green_expanded << " nodes" << endl;
-		average_number_moves = float(blue_expanded) / float(blue_number_moves);
-		outFile << "Average number of nodes expanded by blue per move: " << average_number_moves << endl;
-		average_number_moves = float(green_expanded) / float(green_number_moves);
-		outFile << "Average number of nodes expanded by green per move: " << average_number_moves << endl;
-		outFile << "Player Blue took " << blue_time << " milliseconds (" << float(blue_time) / float(blue_number_moves) << "ms per move)" << endl;
-		outFile << "Player Green took " << green_time << " milliseconds (" << float(green_time) / float(green_number_moves) << "ms per move)" << endl;
+		outFile << "Player Blue took " << blue_time << " milliseconds (" << float(blue_time) / float(GAME_DIMENSION*GAME_DIMENSION/2) << "ms per move)" << endl;
+		outFile << "Player Green took " << green_time << " milliseconds (" << float(green_time) / float(GAME_DIMENSION*GAME_DIMENSION / 2) << "ms per move)" << endl;
 		outFile << "Blue total score: " << blue_score << endl;
 		outFile << "Green total score: " << green_score << endl;
 		if (game_mode != AI)
@@ -148,13 +132,13 @@ void output_game(string filename)
 		{
 			for (int j = 0; j < GAME_DIMENSION; j++)
 			{
-				if (game[i][j].team == BLUE)
+				if (game[i][j] == 'b')
 				{
 					outFile << 'B';
 					if (game_mode!=AI)
 						cout << 'B';
 				}
-				else if (game[i][j].team == GREEN)
+				else if (game[i][j] == 'b')
 				{
 					outFile << 'G';
 					if (game_mode != AI)
@@ -183,13 +167,14 @@ void output_game(string filename)
 void play_game()
 {
 	int x, y;
-	block** game_copy = new block*[GAME_DIMENSION];
+	char** game_copy = new char*[GAME_DIMENSION];
 	for (int i = 0; i < GAME_DIMENSION; i++)
 	{
-		game_copy[i] = new block[GAME_DIMENSION];
+		game_copy[i] = new char[GAME_DIMENSION];
 	}
-	Type current_team = BLUE; //player blue goes first
-	Type opponent = GREEN;
+	cout << sizeof(**game_copy) << endl;
+	char current_team = 'b'; //player 'b' goes first
+	char opponent = 'g';
 
 	/*take turns going until there are no open spaces left*/
 	while (blocks_occupied < GAME_DIMENSION*GAME_DIMENSION)
@@ -197,15 +182,14 @@ void play_game()
 		int human_x;
 		int human_y;
 		/*AI is green*/
-		if (current_team == GREEN && game_mode == AI || current_team == GREEN && game_mode == HUMAN)
+		if (current_team == 'g' && game_mode == AI || current_team == 'g' && game_mode == HUMAN)
 		{
 			//make copy before changing things
 			for (int i = 0; i < GAME_DIMENSION; i++)
 			{
 				for (int j = 0; j < GAME_DIMENSION; j++)
 				{
-					game_copy[i][j].value = game[i][j].value;
-					game_copy[i][j].team = game[i][j].team;
+					game_copy[i][j] = game[i][j];
 				}
 			}
 			clock_t start = clock();
@@ -214,15 +198,14 @@ void play_game()
 			green_time += turn_time;
 		}
 		/*AI is blue*/
-		else if (current_team == BLUE && game_mode == AI)
+		else if (current_team == 'b' && game_mode == AI)
 		{
 			//make copy before changing things
 			for (int i = 0; i < GAME_DIMENSION; i++)
 			{
 				for (int j = 0; j < GAME_DIMENSION; j++)
 				{
-					game_copy[i][j].value = game[i][j].value;
-					game_copy[i][j].team = game[i][j].team;
+					game_copy[i][j] = game[i][j];
 				}
 			}
 			double start = clock();
@@ -233,7 +216,7 @@ void play_game()
 		/*human player's turn*/
 		else if (game_mode == HUMAN || game_mode == DOUBLE_HUMAN)
 		{
-			if (current_team == BLUE)
+			if (current_team == 'b')
 				cout << "Blue's turn" << endl;
 			else
 				cout << "Green's turn" << endl;
@@ -243,22 +226,22 @@ void play_game()
 				for (int j = 0; j < GAME_DIMENSION; j++)
 				{
 					cout << " ";
-					if (game[i][j].team == BLUE)
+					if (game[i][j] == 'b')
 					{
-						cout << "B" << game[i][j].value << " ";
-						if (game[i][j].value < 10) //allignment
+						cout << "B" << values[i][j] << " ";
+						if (values[i][j] < 10) //allignment
 							cout << " ";
 					}
-					else if (game[i][j].team == GREEN)
+					else if (game[i][j] == 'g')
 					{
-						cout << "G" << game[i][j].value << " ";
-						if (game[i][j].value < 10)
+						cout << "G" << values[i][j] << " ";
+						if (values[i][j] < 10)
 							cout << " ";
 					}
-					else if (game[i][j].team == OPEN)
+					else if (game[i][j] == 'o')
 					{
-						cout << "." << game[i][j].value << " ";
-						if (game[i][j].value < 10)
+						cout << "." << values[i][j] << " ";
+						if (values[i][j] < 10)
 							cout << " ";
 					}
 				}
@@ -270,7 +253,7 @@ void play_game()
 				cin >> human_x;
 				cout<< "Enter Y dimension" << endl;
 				cin >> human_y;
-			} while (game[human_y-1][human_x-1].team != OPEN);
+			} while (game[human_y-1][human_x-1] != 'o');
 			y = human_y-1;
 			x = human_x-1;
 		}
@@ -280,87 +263,85 @@ void play_game()
 		}
 		//first act as if it is a para drop
 		blocks_occupied++;
-		game[y][x].team = current_team;
-		if (current_team == BLUE)
+		game[y][x] = current_team;
+		if (current_team == 'b')
 		{
-			blue_score += game[y][x].value;
+			blue_score += values[y][x];
 		}
-		else if (current_team == GREEN)
+		else if (current_team == 'g')
 		{
-			green_score += game[y][x].value;
+			green_score += values[y][x];
 		}
 		//check for neighbors
-		if ((y > 0 && game[y - 1][x].team == current_team) || (y < GAME_DIMENSION - 1 && game[y + 1][x].team == current_team) || (x > 0 && game[y][x - 1].team == current_team) || (x < GAME_DIMENSION - 1 && game[y][x + 1].team == current_team))
+		if ((y > 0 && game[y - 1][x] == current_team) || (y < GAME_DIMENSION - 1 && game[y + 1][x] == current_team) || (x > 0 && game[y][x - 1] == current_team) || (x < GAME_DIMENSION - 1 && game[y][x + 1] == current_team))
 		{
-			if (y > 0 && game[y - 1][x].team == opponent)
+			if (y > 0 && game[y - 1][x] == opponent)
 			{
-				game[y - 1][x].team = current_team;
-				if (current_team == BLUE)
+				game[y - 1][x] = current_team;
+				if (current_team == 'b')
 				{
-					blue_score += game[y - 1][x].value;
-					green_score -= game[y - 1][x].value;
+					blue_score += values[y - 1][x];
+					green_score -= values[y - 1][x];
 				}
 				else
 				{
-					green_score += game[y - 1][x].value;
-					blue_score -= game[y - 1][x].value;
+					green_score += values[y - 1][x];
+					blue_score -= values[y - 1][x];
 				}
 
 			}
-			if (y < GAME_DIMENSION - 1 && game[y + 1][x].team == opponent)
+			if (y < GAME_DIMENSION - 1 && game[y + 1][x] == opponent)
 			{
-				game[y + 1][x].team = current_team;
-				if (current_team == BLUE)
+				game[y + 1][x] = current_team;
+				if (current_team == 'b')
 				{
-					blue_score += game[y + 1][x].value;
-					green_score -= game[y + 1][x].value;
+					blue_score += values[y + 1][x];
+					green_score -= values[y + 1][x];
 				}
 				else
 				{
-					green_score += game[y + 1][x].value;
-					blue_score -= game[y + 1][x].value;
+					green_score += values[y + 1][x];
+					blue_score -= values[y + 1][x];
 				}
 			}
-			if (x > 0 && game[y][x - 1].team == opponent)
+			if (x > 0 && game[y][x - 1] == opponent)
 			{
-				game[y][x - 1].team = current_team;
-				if (current_team == BLUE)
+				game[y][x - 1] = current_team;
+				if (current_team == 'b')
 				{
-					blue_score += game[y][x - 1].value;
-					green_score -= game[y][x - 1].value;
+					blue_score += values[y][x - 1];
+					green_score -= values[y][x - 1];
 				}
 				else
 				{
-					green_score += game[y][x - 1].value;
-					blue_score -= game[y][x - 1].value;
+					green_score += values[y][x - 1];
+					blue_score -= values[y][x - 1];
 				}
 			}
-			if (x < GAME_DIMENSION - 1 && game[y][x + 1].team == opponent)
+			if (x < GAME_DIMENSION - 1 && game[y][x + 1] == opponent)
 			{
-				game[y][x + 1].team = current_team;
-				if (current_team == BLUE)
+				game[y][x + 1] = current_team;
+				if (current_team == 'b')
 				{
-					blue_score += game[y][x + 1].value;
-					green_score -= game[y][x + 1].value;
+					blue_score += values[y][x + 1];
+					green_score -= values[y][x + 1];
 				}
 				else
 				{
-					green_score += game[y][x + 1].value;
-					blue_score -= game[y][x + 1].value;
+					green_score += values[y][x + 1];
+					blue_score -= values[y][x + 1];
 				}
 			}
 		}
-		if (current_team == BLUE)
+		if (current_team == 'b')
 		{
-			current_team = GREEN;
-			opponent = BLUE;
-			blue_number_moves += 1;
+			current_team = 'g';
+			opponent = 'b';
 		}
 		else
 		{
-			current_team = BLUE;
-			opponent = GREEN;
-			green_number_moves += 1;
+			current_team = 'b';
+			opponent = 'g';
 		}
 	}
 	//memory cleanup
@@ -372,7 +353,7 @@ void play_game()
 
 }
 
-int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x, int& y)
+int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y)
 {
 	int best = -1000; //best value so far is held here
 	int best_evaluation = -1000; //used for evaluation function
@@ -384,38 +365,30 @@ int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 			//check if we have reached a terminal node
 			if (blocks_occupied + depth - 1 == GAME_DIMENSION*GAME_DIMENSION - 1)
 			{
-				if (game_board[i][j].team == OPEN)
+				if (game_board[i][j] == 'o')
 				{
-					// This open node will be expanded.
-					if (Max_team == BLUE) {
-						blue_expanded += 1;
-					}
-					else if (Max_team == GREEN) {
-						green_expanded += 1;
-					}
-
 					//set location values which will be sent back
 					x = j;
 					y = i;
-					int utility = game_board[i][j].value;
+					int utility = values[i][j];
 					//check for neighbors
-					if ((i > 0 && game_board[i - 1][j].team == Max_team) || (i < GAME_DIMENSION - 1 && game_board[i + 1][j].team == Max_team) || (j > 0 && game_board[i][j - 1].team == Max_team) || (j < GAME_DIMENSION - 1 && game_board[i][j + 1].team == Max_team))
+					if ((i > 0 && game_board[i - 1][j] == Max_team) || (i < GAME_DIMENSION - 1 && game_board[i + 1][j] == Max_team) || (j > 0 && game_board[i][j - 1] == Max_team) || (j < GAME_DIMENSION - 1 && game_board[i][j + 1] == Max_team))
 					{
-						if (i > 0 && game_board[i - 1][j].team == Min_team)
+						if (i > 0 && game_board[i - 1][j] == Min_team)
 						{
-							utility += game_board[i - 1][j].value*2;
+							utility += values[i - 1][j]*2;
 						}
-						if (i < GAME_DIMENSION - 1 && game_board[i + 1][j].team == Min_team)
+						if (i < GAME_DIMENSION - 1 && game_board[i + 1][j] == Min_team)
 						{
-							utility += game_board[i + 1][j].value*2;
+							utility += values[i + 1][j]*2;
 						}
-						if (j > 0 && game_board[i][j - 1].team == Min_team)
+						if (j > 0 && game_board[i][j - 1] == Min_team)
 						{
-							utility += game_board[i][j - 1].value*2;
+							utility += values[i][j - 1]*2;
 						}
-						if (j < GAME_DIMENSION - 1 && game_board[i][j + 1].team == Min_team)
+						if (j < GAME_DIMENSION - 1 && game_board[i][j + 1] == Min_team)
 						{
-							utility += game_board[i][j + 1].value*2;
+							utility += values[i][j + 1]*2;
 						}
 					}
 					return utility;
@@ -427,50 +400,41 @@ int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 				int local_best;
 				int x_loc; //used to hold return value
 				int y_loc;
-				if (game_board[i][j].team == OPEN)
+				if (game_board[i][j] == 'o')
 				{
-					// This open node will be expanded.
-					if (Max_team == BLUE) {
-						blue_expanded += 1;
-					}
-					else if (Max_team == GREEN) {
-						green_expanded += 1;
-					}
-
 					//MAKE COPY EACH TIME
-					block** copy = new block*[GAME_DIMENSION];
+					char** copy = new char*[GAME_DIMENSION];
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
-						copy[k] = new block[GAME_DIMENSION];
+						copy[k] = new char[GAME_DIMENSION];
 					}
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
 						for (int m = 0; m < GAME_DIMENSION; m++)
 						{
-							copy[k][m].value = game_board[k][m].value;
-							copy[k][m].team = game_board[k][m].team;
+							copy[k][m] = game_board[k][m];
 						}
 					}
 					//perform para drop
-					copy[i][j].team = Max_team;
+					copy[i][j] = Max_team;
 					//check for neighbors
-					if ((i > 0 && copy[i - 1][j].team == Max_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Max_team) || (j > 0 && copy[i][j - 1].team == Max_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Max_team))
+					if ((i > 0 && copy[i - 1][j] == Max_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team) || (j > 0 && copy[i][j - 1] == Max_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team))
 					{
-						if (i > 0 && copy[i - 1][j].team == Min_team)
+						if (i > 0 && copy[i - 1][j] == Min_team)
 						{
-							copy[i - 1][j].team = Max_team;
+							copy[i - 1][j] = Max_team;
 						}
-						if (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Min_team)
+						if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team)
 						{
-							copy[i + 1][j].team = Max_team;
+							copy[i + 1][j] = Max_team;
 						}
-						if (j > 0 && copy[i][j - 1].team == Min_team)
+						if (j > 0 && copy[i][j - 1] == Min_team)
 						{
-							copy[i][j - 1].team = Max_team;
+							copy[i][j - 1] = Max_team;
 						}
-						if (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Min_team)
+						if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team)
 						{
-							copy[i][j + 1].team = Max_team;
+							copy[i][j + 1] = Max_team;
 						}
 					}
 					local_best = min_val(copy, Max_team, Min_team, depth + 1, x_loc, y_loc);
@@ -495,51 +459,42 @@ int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 			{
 				int max_total = 0;
 				int min_total = 0;
-				if (game_board[i][j].team == OPEN)
+				if (game_board[i][j] == 'o')
 				{
-					// This open node will be expanded.
-					if (Max_team == BLUE) {
-						blue_expanded += 1;
-					}
-					else if (Max_team == GREEN) {
-						green_expanded += 1;
-					}
-
 					//MAKE COPY EACH TIME
 					int local_best;
-					block** copy = new block*[GAME_DIMENSION];
+					char** copy = new char*[GAME_DIMENSION];
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
-						copy[k] = new block[GAME_DIMENSION];
+						copy[k] = new char[GAME_DIMENSION];
 					}
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
 						for (int m = 0; m < GAME_DIMENSION; m++)
 						{
-							copy[k][m].value = game_board[k][m].value;
-							copy[k][m].team = game_board[k][m].team;
+							copy[k][m] = game_board[k][m];
 						}
 					}
 					//perform para drop
-					copy[i][j].team = Max_team;
+					copy[i][j] = Max_team;
 					//check for neighbors
-					if ((i > 0 && copy[i - 1][j].team == Max_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Max_team) || (j > 0 && copy[i][j - 1].team == Max_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Max_team))
+					if ((i > 0 && copy[i - 1][j] == Max_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team) || (j > 0 && copy[i][j - 1] == Max_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team))
 					{
-						if (i > 0 && copy[i - 1][j].team == Min_team)
+						if (i > 0 && copy[i - 1][j] == Min_team)
 						{
-							copy[i - 1][j].team = Max_team;
+							copy[i - 1][j] = Max_team;
 						}
-						if (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Min_team)
+						if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team)
 						{
-							copy[i + 1][j].team = Max_team;
+							copy[i + 1][j] = Max_team;
 						}
-						if (j > 0 && copy[i][j - 1].team == Min_team)
+						if (j > 0 && copy[i][j - 1] == Min_team)
 						{
-							copy[i][j - 1].team = Max_team;
+							copy[i][j - 1] = Max_team;
 						}
-						if (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Min_team)
+						if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team)
 						{
-							copy[i][j + 1].team = Max_team;
+							copy[i][j + 1] = Max_team;
 						}
 					}
 
@@ -548,13 +503,13 @@ int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 					{
 						for (int m = 0; m < GAME_DIMENSION; m++)
 						{
-							if (copy[k][m].team == Max_team)
+							if (copy[k][m] == Max_team)
 							{
-								max_total += copy[k][m].value;
+								max_total += values[k][m];
 							}
-							else if (copy[k][m].team == Min_team)
+							else if (copy[k][m] == Min_team)
 							{
-								min_total += copy[k][m].value;
+								min_total += values[k][m];
 							}
 						}
 					}
@@ -586,7 +541,7 @@ int max_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 
 }
 
-int min_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x, int& y)
+int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y)
 {
 	int best = 1000; //best value (in this case lowest value) so far is held here
 	int best_evaluation = 1000; //used for evaluation function
@@ -598,38 +553,30 @@ int min_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 			//check if we have reached a terminal node
 			if (blocks_occupied + depth - 1 == GAME_DIMENSION*GAME_DIMENSION - 1)
 			{
-				if (game_board[i][j].team == OPEN)
+				if (game_board[i][j] == 'o')
 				{
-					// This open node will be expanded.
-					if (Max_team == BLUE) {
-						blue_expanded += 1;
-					}
-					else if (Max_team == GREEN) {
-						green_expanded += 1;
-					}
-
 					//set location values which will be sent back
 					x = j;
 					y = i;
-					int utility = game_board[i][j].value;
+					int utility = values[i][j];
 					//check for neighbors
-					if ((i > 0 && game_board[i - 1][j].team == Min_team) || (i < GAME_DIMENSION - 1 && game_board[i + 1][j].team == Min_team) || (j > 0 && game_board[i][j - 1].team == Min_team) || (j < GAME_DIMENSION - 1 && game_board[i][j + 1].team == Min_team))
+					if ((i > 0 && game_board[i - 1][j] == Min_team) || (i < GAME_DIMENSION - 1 && game_board[i + 1][j] == Min_team) || (j > 0 && game_board[i][j - 1] == Min_team) || (j < GAME_DIMENSION - 1 && game_board[i][j + 1] == Min_team))
 					{
-						if (i > 0 && game_board[i - 1][j].team == Max_team)
+						if (i > 0 && game_board[i - 1][j] == Max_team)
 						{
-							utility += game_board[i - 1][j].value*2;
+							utility += values[i - 1][j]*2;
 						}
-						if (i < GAME_DIMENSION - 1 && game_board[i + 1][j].team == Max_team)
+						if (i < GAME_DIMENSION - 1 && game_board[i + 1][j] == Max_team)
 						{
-							utility += game_board[i + 1][j].value*2;
+							utility += values[i + 1][j]*2;
 						}
-						if (j > 0 && game_board[i][j - 1].team == Max_team)
+						if (j > 0 && game_board[i][j - 1] == Max_team)
 						{
-							utility += game_board[i][j - 1].value*2;
+							utility += values[i][j - 1]*2;
 						}
-						if (j < GAME_DIMENSION - 1 && game_board[i][j + 1].team == Max_team)
+						if (j < GAME_DIMENSION - 1 && game_board[i][j + 1] == Max_team)
 						{
-							utility += game_board[i][j + 1].value*2;
+							utility += values[i][j + 1]*2;
 						}
 					}
 					return utility;
@@ -641,50 +588,41 @@ int min_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 				int local_best;
 				int x_loc; //used to hold return value
 				int y_loc;
-				if (game_board[i][j].team == OPEN)
+				if (game_board[i][j] == 'o')
 				{
-					// This open node will be expanded.
-					if (Max_team == BLUE) {
-						blue_expanded += 1;
-					}
-					else if (Max_team == GREEN) {
-						green_expanded += 1;
-					}
-
 					//MAKE COPY EACH TIME
-					block** copy = new block*[GAME_DIMENSION];
+					char** copy = new char*[GAME_DIMENSION];
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
-						copy[k] = new block[GAME_DIMENSION];
+						copy[k] = new char[GAME_DIMENSION];
 					}
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
 						for (int m = 0; m < GAME_DIMENSION; m++)
 						{
-							copy[k][m].value = game_board[k][m].value;
-							copy[k][m].team = game_board[k][m].team;
+							copy[k][m] = game_board[k][m];
 						}
 					}
 					//perform para drop
-					copy[i][j].team = Min_team;
+					copy[i][j] = Min_team;
 					//check for neighbors
-					if ((i > 0 && copy[i - 1][j].team == Min_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Min_team) || (j > 0 && copy[i][j - 1].team == Min_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Min_team))
+					if ((i > 0 && copy[i - 1][j] == Min_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team) || (j > 0 && copy[i][j - 1] == Min_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team))
 					{
-						if (i > 0 && copy[i - 1][j].team == Max_team)
+						if (i > 0 && copy[i - 1][j] == Max_team)
 						{
-							copy[i - 1][j].team = Min_team;
+							copy[i - 1][j] = Min_team;
 						}
-						if (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Max_team)
+						if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team)
 						{
-							copy[i + 1][j].team = Min_team;
+							copy[i + 1][j] = Min_team;
 						}
-						if (j > 0 && copy[i][j - 1].team == Max_team)
+						if (j > 0 && copy[i][j - 1] == Max_team)
 						{
-							copy[i][j - 1].team = Min_team;
+							copy[i][j - 1] = Min_team;
 						}
-						if (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Max_team)
+						if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team)
 						{
-							copy[i][j + 1].team = Min_team;
+							copy[i][j + 1] = Min_team;
 						}
 					}
 					local_best = max_val(copy, Max_team, Min_team, depth + 1, x_loc, y_loc);
@@ -709,51 +647,42 @@ int min_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 			{
 				int max_total = 0;
 				int min_total = 0;
-				if (game_board[i][j].team == OPEN)
+				if (game_board[i][j] == 'o')
 				{
-					// This open node will be expanded.
-					if (Max_team == BLUE) {
-						blue_expanded += 1;
-					}
-					else if (Max_team == GREEN) {
-						green_expanded += 1;
-					}
-
 					//MAKE COPY EACH TIME
 					int local_best;
-					block** copy = new block*[GAME_DIMENSION];
+					char** copy = new char*[GAME_DIMENSION];
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
-						copy[k] = new block[GAME_DIMENSION];
+						copy[k] = new char[GAME_DIMENSION];
 					}
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
 						for (int m = 0; m < GAME_DIMENSION; m++)
 						{
-							copy[k][m].value = game_board[k][m].value;
-							copy[k][m].team = game_board[k][m].team;
+							copy[k][m] = game_board[k][m];
 						}
 					}
 					//perform para drop
-					copy[i][j].team = Min_team;
+					copy[i][j] = Min_team;
 					//check for neighbors
-					if ((i > 0 && copy[i - 1][j].team == Min_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Min_team) || (j > 0 && copy[i][j - 1].team == Min_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Min_team))
+					if ((i > 0 && copy[i - 1][j] == Min_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team) || (j > 0 && copy[i][j - 1] == Min_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team))
 					{
-						if (i > 0 && copy[i - 1][j].team == Max_team)
+						if (i > 0 && copy[i - 1][j] == Max_team)
 						{
-							copy[i - 1][j].team = Min_team;
+							copy[i - 1][j] = Min_team;
 						}
-						if (i < GAME_DIMENSION - 1 && copy[i + 1][j].team == Max_team)
+						if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team)
 						{
-							copy[i + 1][j].team = Min_team;
+							copy[i + 1][j] = Min_team;
 						}
-						if (j > 0 && copy[i][j - 1].team == Max_team)
+						if (j > 0 && copy[i][j - 1] == Max_team)
 						{
-							copy[i][j - 1].team = Min_team;
+							copy[i][j - 1] = Min_team;
 						}
-						if (j < GAME_DIMENSION - 1 && copy[i][j + 1].team == Max_team)
+						if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team)
 						{
-							copy[i][j + 1].team = Min_team;
+							copy[i][j + 1] = Min_team;
 						}
 					}
 
@@ -762,13 +691,13 @@ int min_val(block** game_board, Type Max_team, Type Min_team, int depth, int& x,
 					{
 						for (int m = 0; m < GAME_DIMENSION; m++)
 						{
-							if (copy[k][m].team == Max_team)
+							if (copy[k][m] == Max_team)
 							{
-								max_total += copy[k][m].value;
+								max_total += values[k][m];
 							}
-							else if (copy[k][m].team == Min_team)
+							else if (copy[k][m] == Min_team)
 							{
-								min_total += copy[k][m].value;
+								min_total += values[k][m];
 							}
 						}
 					}
@@ -828,10 +757,10 @@ int main()
 		game_mode = DOUBLE_HUMAN;
 	}
 
-	game = new block*[GAME_DIMENSION]; //pointer to gameboard
+	game = new char*[GAME_DIMENSION]; //pointer to gameboard
 	for (int i = 0; i < GAME_DIMENSION; i++)
 	{
-		game[i] = new block[GAME_DIMENSION];
+		game[i] = new char[GAME_DIMENSION];
 	}
 
 	/*human play setup*/
