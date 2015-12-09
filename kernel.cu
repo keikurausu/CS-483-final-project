@@ -36,8 +36,9 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 
 char** game;  //pointer to gameboard
 char* hostArray; // array which holds stuff that needs to be copied to device
-int* hostOutput = 0; //pointer to host output array
+int* hostOutput; //pointer to host output array
 int arrayCount;
+int kernelLaunchCount = 0;
 
 int blue_score = 0;
 int green_score = 0;
@@ -165,7 +166,7 @@ __global__ void gameSearchKernel(char* input, int* output, const int size, int n
 							{
 								max_total += Vc[k][m];
 							}
-							else
+							else if (copy[k][m] == Min_team)
 							{
 								min_total += Vc[k][m];
 							}
@@ -199,13 +200,20 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 	char* dev_input = 0;
 	int* dev_output = 0;
 	cudaError_t cudaStatus;
-
+	// Check for any errors launching the kernel
+	
 	//allocate host memory
-	cudaStatus = cudaMallocHost((void**)&hostOutput, 3 * size * sizeof(int));
+	/*
+	cudaStatus = cudaHostAlloc((void**)&hostOutput, 3 * size * sizeof(int), cudaHostAllocPortable);
+	//cudaStatus = cudaMallocHost((void**)&hostOutput, 3 * size * sizeof(int));
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaMalloc host output failed!");
 		goto Error;
 	}
+	*/
+	//cout << "Allocating hostOutput..." << endl;
+	hostOutput = (int*)malloc(3 * size * sizeof(int));
+	//cout << hostOutput << endl;
 	// Allocate GPU memory  .
 	cudaStatus = cudaMalloc((void**)&dev_output, 3 * size * sizeof(int));
 	if (cudaStatus != cudaSuccess) {
@@ -217,14 +225,14 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 		printf("cudaMalloc device input failed!");
 		goto Error;
 	}
-
+	
 	// Copy input from host memory to GPU buffer.
 	cudaStatus = cudaMemcpy(dev_input, input, GAME_DIMENSION * GAME_DIMENSION * size * sizeof(char), cudaMemcpyHostToDevice);
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaMemcpy 1 host to device failed!");
 		goto Error;
 	}
-
+	
 	//set up launch parameters
 	//dim3 grid((size - 1) / THREADS + 1, 1, 1);
 	//dim3 threads(THREADS, 1, 1);
@@ -233,13 +241,6 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 	gameSearchKernel << < (size - 1) / THREADS + 1, THREADS >> >(dev_input, dev_output, size, nodes, Max_team, Min_team);
 
 
-	// Check for any errors launching the kernel
-	cudaStatus = cudaGetLastError();
-	if (cudaStatus != cudaSuccess) {
-		printf("gameSearchKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-		goto Error;
-	}
-
 	// cudaDeviceSynchronize waits for the kernel to finish, and returns
 	// any errors encountered during the launch.
 	cudaStatus = cudaDeviceSynchronize();
@@ -247,6 +248,13 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 		printf("cudaDeviceSynchronize returned error code %d after launching gameSearchKernel!\n", cudaStatus);
 		goto Error;
 	}
+	// Check for any errors launching the kernel
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess) {
+		printf("gameSearchKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+		goto Error;
+	}
+
 
 	// Copy output from GPU buffer to host memory.
 	cudaStatus = cudaMemcpy(hostOutput, dev_output, 3* size * sizeof(int), cudaMemcpyDeviceToHost);
@@ -256,6 +264,18 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 	}
 	//for (int i = 0; i < 100; i++)
 		//cout << hostOutput[i] << " ";
+	//free memory
+	cudaStatus = cudaFree(dev_input);
+	if (cudaStatus != cudaSuccess) {
+		printf("cudaFree input failed!");
+		goto Error;
+	}
+	cudaStatus = cudaFree(dev_output);
+	if (cudaStatus != cudaSuccess) {
+		printf("cudaFree output failed!");
+		goto Error;
+	}
+	return cudaStatus;
 
 Error:
 	cudaFree(dev_input);
@@ -277,7 +297,11 @@ void setup_game(int x)
 		}
 	}
 	//set constant memory
-	cudaMemcpyToSymbol(Vc, deviceValues, GAME_DIMENSION*GAME_DIMENSION*sizeof(int));
+	cudaError_t cudaStatus;
+	cudaStatus = cudaMemcpyToSymbol(Vc, deviceValues, GAME_DIMENSION*GAME_DIMENSION*sizeof(int));
+	if (cudaStatus != cudaSuccess) {
+		printf("cudaMemcpyToSymbol failed!");
+	}
 	blue_time = 0;
 	green_time = 0;
 	blue_score = 0;
@@ -373,23 +397,34 @@ void play_game()
 			/*check if we need to launch GPU*/
 			if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied >= CPU_END_LIMIT)
 			{
+				kernelLaunchCount++;
 				hostArray = new char[(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2)*GAME_DIMENSION*GAME_DIMENSION]; //allocate memory to store data that needs to be copied to device
 				arrayCount = 0;
+				cudaError_t cudaStatus;
 				double start = clock();
 				max_val(game_copy, current_team, opponent, 1, x, y); //take turn -- once this function returns x and y will hold location of where to go next
-				cudaError_t cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2), GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2, current_team, opponent);
+				 cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2), GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2, current_team, opponent);
 				if (cudaStatus != cudaSuccess) {
 					printf("searchHelper failed!");
 				}
-				// cudaDeviceReset must be called before exiting in order for profiling and
-				// tracing tools such as Nsight and Visual Profiler to show complete traces.
-				cudaStatus = cudaDeviceReset();
-				if (cudaStatus != cudaSuccess) {
-					printf("cudaDeviceReset failed!");
-				}
+				
 				double turn_time = (clock() - start);
 				green_time += turn_time;
 				delete[] hostArray; // free array
+				//cudaError_t cudaStatus;
+				//cout << "freeing host Output..." << endl;
+				free(hostOutput);
+				//cout << "hostOutput freed" << endl;
+				//if (cudaStatus != cudaSuccess)
+				//{
+				//	printf("cuda free host failed");
+				//}
+				// cudaDeviceReset must be called before exiting in order for profiling and
+				// tracing tools such as Nsight and Visual Profiler to show complete traces.
+				//cudaStatus = cudaDeviceReset();
+				//if (cudaStatus != cudaSuccess) {
+				//	printf("cudaDeviceReset failed!");
+				//}
 
 			}
 			else{
@@ -558,12 +593,6 @@ void play_game()
 		{
 			current_team = 'b';
 			opponent = 'g';
-		}
-
-		//free host memory if neccessary
-		if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied + 1 >= CPU_END_LIMIT)
-		{
-			cudaFreeHost(hostOutput); 
 		}
 	}
 	//memory cleanup
@@ -968,7 +997,10 @@ int main()
 		printf("cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
 	}
 	size_t size = 1024 * 1024 * 1024; //set a good amount of memory
-	cudaDeviceSetLimit(cudaLimitMallocHeapSize, size);
+	cudaStatus = cudaDeviceSetLimit(cudaLimitMallocHeapSize, size);
+	if (cudaStatus != cudaSuccess) {
+		printf("cudaSetLimit failed!  Do you have a CUDA-capable GPU installed?");
+	}
 	double endTime;
 	double programTime;
 	int mode;
@@ -1054,6 +1086,7 @@ int main()
 	delete[] game;
 	endTime = clock();
 	programTime = (endTime - startTime) / 1000;
+	cout << kernelLaunchCount << endl;
 	cout << "Process Execution Time " << programTime << "s" << endl;
 	cin.ignore();
 	cin.get(); // pause program to view results
