@@ -32,7 +32,7 @@ void output_game(string filename);
 void play_game();
 int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y);
 int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y);
-cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char Min_team);
+cudaError_t searchHelper(char* input, const int size);
 
 char** game;  //pointer to gameboard
 char* hostArray; // array which holds stuff that needs to be copied to device
@@ -45,7 +45,7 @@ double blue_time = 0;
 double green_time = 0;
 int blocks_occupied = 0; //keeps track of number of blocks which are not OPEN
 gameMode game_mode;
-/*holds value data for the 5 game boards*/
+/*holds value data for each location of the 5 game boards*/
 int gameboard[5][6][6] =
 {
 	//Keren
@@ -94,122 +94,41 @@ int gameboard[5][6][6] =
 		{ 1, 1, 1, 1, 1, 1 }
 	}
 };
-int abcd = 0;
 
 //input holds game states up to depth 3, output will hold 3 values to be evaluated at each depth 3 node as follows. [utility value][y-coord][x-coord]
-__global__ void gameSearchKernel(char* input, int* output, const int size, int nodes, char Max_team, char Min_team)
+__global__ void gameSearchKernel(char* input, int* output, const int size)
 {
-	char intermediate_buffer[GAME_DIMENSION][GAME_DIMENSION];
-	int max_total = 0;
-	int min_total = 0;
-	int best_evaluation = 10000; //holds best value found so far
-	int x; //holds best x coordinate
-	int y; //holds best y coordinate
-	int index = blockIdx.x*blockDim.x*GAME_DIMENSION*GAME_DIMENSION + threadIdx.x*GAME_DIMENSION*GAME_DIMENSION; //extract index helper
-	if (index + 35 < size*GAME_DIMENSION*GAME_DIMENSION)
+	//int i = threadIdx.x;
+	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
-		for (int i = 0; i < GAME_DIMENSION; i++)
-		{
-			for (int j = 0; j < GAME_DIMENSION; j++)
-			{
-				intermediate_buffer[i][j] = input[index + i*GAME_DIMENSION + j]; //extract the root this thread needs to explore
-			}
-		}
-		for (int i = 0; i < GAME_DIMENSION; i++)
-		{
-			for (int j = 0; j < GAME_DIMENSION; j++)
-			{
-				if (intermediate_buffer[i][j] == 'o')
-				{
-					max_total = 0;
-					min_total = 0;
-					int local_best;
-					//MAKE COPY EACH TIME
-					char copy[GAME_DIMENSION][GAME_DIMENSION];
-					for (int k = 0; k < GAME_DIMENSION; k++)
-					{
-						for (int m = 0; m < GAME_DIMENSION; m++)
-						{
-							copy[k][m] = intermediate_buffer[k][m];
-						}
-					}
-					//perform para drop
-					copy[i][j] = Min_team;
-					//check for neighbors
-					if ((i > 0 && copy[i - 1][j] == Min_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team) || (j > 0 && copy[i][j - 1] == Min_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team))
-					{
-						if (i > 0 && copy[i - 1][j] == Max_team)
-						{
-							copy[i - 1][j] = Min_team;
-						}
-						if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team)
-						{
-							copy[i + 1][j] = Min_team;
-						}
-						if (j > 0 && copy[i][j - 1] == Max_team)
-						{
-							copy[i][j - 1] = Min_team;
-						}
-						if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team)
-						{
-							copy[i][j + 1] = Min_team;
-						}
-					}
-
-					/*add up all current values on board of max_team and min_team and compute the difference*/
-					for (int k = 0; k < GAME_DIMENSION; k++)
-					{
-						for (int m = 0; m < GAME_DIMENSION; m++)
-						{
-							if (copy[k][m] == Max_team)
-							{
-								max_total += Vc[k][m];
-							}
-							else
-							{
-								min_total += Vc[k][m];
-							}
-						}
-					}
-					/*we want to minimize the difference*/
-					local_best = max_total - min_total;
-					if (local_best < best_evaluation)
-					{
-						best_evaluation = local_best;
-						x = j;
-						y = i;
-					}
-				}
-			}
-		}
-		//write to output
-		index = blockIdx.x*blockDim.x * 3 + threadIdx.x * 3;
-		output[index] = best_evaluation;
-		output[index + 1] = y;
-		output[index + 2] = x;
-		//printf("%d ", blockIdx.x);
+		printf("%d %d %d %d %d %d %d %d %d %d", Vc[0][1], Vc[0][2], Vc[0][3], Vc[0][4], Vc[0][5], Vc[1][0], Vc[1][1], Vc[1][2], Vc[1][3], Vc[1][4]);
 	}
+	output[blockIdx.x*blockDim.x + threadIdx.x] = 1;
 }
 
 // Helper function for launching GPU --size is number of game boards
-cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char Min_team)
+cudaError_t searchHelper(char* input, const int size)
 {
-	//for (int i = 0; i < 100; i++)
-		//printf("%c ", input[i]);
 	char* dev_input = 0;
 	int* dev_output = 0;
 	cudaError_t cudaStatus;
 
-	//allocate host memory
-	cudaStatus = cudaMallocHost((void**)&hostOutput, 3 * size * sizeof(int));
+	cudaStatus = cudaSetDevice(0);
 	if (cudaStatus != cudaSuccess) {
-		printf("cudaMalloc host output failed!");
+		printf("cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
 		goto Error;
 	}
+	//allocate host memory
+	cudaMallocHost(&hostOutput, 3 * size * sizeof(int));
 	// Allocate GPU memory  .
 	cudaStatus = cudaMalloc((void**)&dev_output, 3 * size * sizeof(int));
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaMalloc device output failed!");
+		goto Error;
+	}
+	cudaStatus = cudaMemset(dev_output, 0, 3*size * sizeof(int));
+	if (cudaStatus != cudaSuccess) {
+		printf("cudaMemset device output failed!");
 		goto Error;
 	}
 	cudaStatus = cudaMalloc((void**)&dev_input, GAME_DIMENSION * GAME_DIMENSION * size * sizeof(char));
@@ -226,12 +145,11 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 	}
 
 	//set up launch parameters
-	//dim3 grid((size - 1) / THREADS + 1, 1, 1);
-	//dim3 threads(THREADS, 1, 1);
+	dim3 grid((size - 1) / THREADS + 1, 1, 1);
+	dim3 threads(THREADS, 1, 1);
 
 	// Launch kernel
-	gameSearchKernel << < (size - 1) / THREADS + 1, THREADS >> >(dev_input, dev_output, size, nodes, Max_team, Min_team);
-
+	gameSearchKernel << <grid, threads >> >(dev_input, dev_output, size);
 
 	// Check for any errors launching the kernel
 	cudaStatus = cudaGetLastError();
@@ -254,12 +172,11 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 		printf("cudaMemcpy 2 device to host failed!");
 		goto Error;
 	}
-	//for (int i = 0; i < 100; i++)
-		//cout << hostOutput[i] << " ";
 
 Error:
 	cudaFree(dev_input);
 	cudaFree(dev_output);
+	cout << hostOutput[1];
 	return cudaStatus;
 }
 
@@ -376,8 +293,7 @@ void play_game()
 				hostArray = new char[(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2)*GAME_DIMENSION*GAME_DIMENSION]; //allocate memory to store data that needs to be copied to device
 				arrayCount = 0;
 				double start = clock();
-				max_val(game_copy, current_team, opponent, 1, x, y); //take turn -- once this function returns x and y will hold location of where to go next
-				cudaError_t cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2), GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2, current_team, opponent);
+				cudaError_t cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2));
 				if (cudaStatus != cudaSuccess) {
 					printf("searchHelper failed!");
 				}
@@ -387,8 +303,9 @@ void play_game()
 				if (cudaStatus != cudaSuccess) {
 					printf("cudaDeviceReset failed!");
 				}
+				//max_val(game_copy, current_team, opponent, 1, x, y); //take turn -- once this function returns x and y will hold location of where to go next
 				double turn_time = (clock() - start);
-				green_time += turn_time;
+				blue_time += turn_time;
 				delete[] hostArray; // free array
 
 			}
@@ -396,7 +313,7 @@ void play_game()
 				double start = clock();
 				max_val(game_copy, current_team, opponent, 1, x, y); //take turn -- once this function returns x and y will hold location of where to go next
 				double turn_time = (clock() - start);
-				green_time += turn_time;
+				blue_time += turn_time;
 			}
 		}
 		/*AI is blue*/
@@ -559,12 +476,7 @@ void play_game()
 			current_team = 'b';
 			opponent = 'g';
 		}
-
-		//free host memory if neccessary
-		if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied + 1 >= CPU_END_LIMIT)
-		{
-			cudaFreeHost(hostOutput); 
-		}
+		cudaFreeHost(hostOutput); //free host memory
 	}
 	//memory cleanup
 	for (int i = 0; i < GAME_DIMENSION; i++)
@@ -728,7 +640,7 @@ int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 							{
 								hostArray[arrayCount*GAME_DIMENSION*GAME_DIMENSION + GAME_DIMENSION*ii + jj] = copy[ii][jj];
 							}
-						}
+						} 
 						arrayCount++;
 					}
 					/*add up all current values on board of max_team and min_team and compute the difference*/
@@ -918,6 +830,7 @@ int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 							copy[i][j + 1] = Min_team;
 						}
 					}
+
 					/*add up all current values on board of max_team and min_team and compute the difference*/
 					for (int k = 0; k < GAME_DIMENSION; k++)
 					{
@@ -963,12 +876,6 @@ int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 
 int main()
 {
-	cudaError_t cudaStatus = cudaSetDevice(0);
-	if (cudaStatus != cudaSuccess) {
-		printf("cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-	}
-	size_t size = 1024 * 1024 * 1024; //set a good amount of memory
-	cudaDeviceSetLimit(cudaLimitMallocHeapSize, size);
 	double endTime;
 	double programTime;
 	int mode;
