@@ -1,4 +1,3 @@
-
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -14,17 +13,8 @@ using namespace std;
 
 #define GAME_DIMENSION 6
 #define CPU_DEPTH_LIMIT 3
-#define CPU_END_LIMIT 8 //when we have this many or less open spaces on the board, just let the CPU go all the way to the end without launching kernels
+#define CPU_END_LIMIT 8 //when we have this many or less open spaces on the board, just let the CPU go all the way to the end without launching kernels since we don't have many nodes
 #define THREADS 256
-
-//@@ Define constant memory for device kernel here
-__constant__ int Vc[GAME_DIMENSION][GAME_DIMENSION]; //holds gameboard values for device
-
-enum gameMode {AI, HUMAN, DOUBLE_HUMAN};
-
-int values[GAME_DIMENSION][GAME_DIMENSION]; //constant array of gameboard values which is filled based on selected map
-
-// 'o' for open, 'b' for blue, 'g' for green team
 
 /*function declarations*/
 void setup_game(int x);
@@ -34,18 +24,26 @@ int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y);
 cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char Min_team);
 
-char** game;  //pointer to gameboard
+/*global variable declarations*/
+enum gameMode { AI, HUMAN, DOUBLE_HUMAN }; //AI for AIvsAI, HUMAN for human vs AI, DOUBLE_HUMAN for human vs human
+
+__constant__ int Vc[GAME_DIMENSION][GAME_DIMENSION]; //constant memory which holds gameboard values for device computations
+
+int values[GAME_DIMENSION][GAME_DIMENSION]; //constant array of gameboard values which is filled based on selected map. Used by CPU
+char** game;  //pointer to our gameboard. 'o' for open, 'b' for blue, 'g' for green team occupying a space
 char* hostArray; // array which holds stuff that needs to be copied to device
 int* hostOutput; //pointer to host output array
-int arrayCount;
-int kernelLaunchCount = 0;
-
+int arrayCount; //keeps track of where we are in the depth first search
+int kernelLaunchCount = 0; //keeps track of number of kernels launched for debugging purposes
+int pass = 1; //pass 1 fill array which is sent to kernel, pass 2 read from array filled by kernel
+int pMode = 1; //used to compare performance between serial and parallel version. Set to 0 and set CPU_DEPTH_LIMIT to 4 to disable parallel code
 int blue_score = 0;
 int green_score = 0;
-double blue_time = 0;
-double green_time = 0;
+double blue_time = 0; //time taken by blue AI. Used for computing average time per turn
+double green_time = 0; //time taken by green AI.
 int blocks_occupied = 0; //keeps track of number of blocks which are not OPEN
-gameMode game_mode;
+gameMode game_mode; //current gamemode
+
 /*holds value data for the 5 game boards*/
 int gameboard[5][6][6] =
 {
@@ -95,9 +93,8 @@ int gameboard[5][6][6] =
 		{ 1, 1, 1, 1, 1, 1 }
 	}
 };
-int abcd = 0;
 
-//input holds game states up to depth 3, output will hold 3 values to be evaluated at each depth 3 node as follows. [utility value][y-coord][x-coord]
+/* input holds game states up to depth 3, output will hold 3 values to be evaluated at each depth 3 node as follows. [utility value][y-coord][x-coord] */
 __global__ void gameSearchKernel(char* input, int* output, const int size, int nodes, char Max_team, char Min_team)
 {
 	char intermediate_buffer[GAME_DIMENSION][GAME_DIMENSION];
@@ -107,7 +104,7 @@ __global__ void gameSearchKernel(char* input, int* output, const int size, int n
 	int x; //holds best x coordinate
 	int y; //holds best y coordinate
 	int index = blockIdx.x*blockDim.x*GAME_DIMENSION*GAME_DIMENSION + threadIdx.x*GAME_DIMENSION*GAME_DIMENSION; //extract index helper
-	if (index + 35 < size*GAME_DIMENSION*GAME_DIMENSION)
+	if (index < size*GAME_DIMENSION*GAME_DIMENSION)
 	{
 		for (int i = 0; i < GAME_DIMENSION; i++)
 		{
@@ -188,38 +185,27 @@ __global__ void gameSearchKernel(char* input, int* output, const int size, int n
 		output[index] = best_evaluation;
 		output[index + 1] = y;
 		output[index + 2] = x;
-		//printf("%d ", blockIdx.x);
 	}
 }
 
-// Helper function for launching GPU --size is number of game boards
+/* Helper function for launching GPU. Gets everything ready, then launches kernel, and copies memory back to host. //size is number of game boards */
 cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char Min_team)
 {
-	//for (int i = 0; i < 100; i++)
-		//printf("%c ", input[i]);
 	char* dev_input = 0;
 	int* dev_output = 0;
 	cudaError_t cudaStatus;
-	// Check for any errors launching the kernel
 	
 	//allocate host memory
-	/*
-	cudaStatus = cudaHostAlloc((void**)&hostOutput, 3 * size * sizeof(int), cudaHostAllocPortable);
-	//cudaStatus = cudaMallocHost((void**)&hostOutput, 3 * size * sizeof(int));
-	if (cudaStatus != cudaSuccess) {
-		printf("cudaMalloc host output failed!");
-		goto Error;
-	}
-	*/
-	//cout << "Allocating hostOutput..." << endl;
 	hostOutput = (int*)malloc(3 * size * sizeof(int));
-	//cout << hostOutput << endl;
-	// Allocate GPU memory  .
+	
+	// Allocate GPU memory for output array
 	cudaStatus = cudaMalloc((void**)&dev_output, 3 * size * sizeof(int));
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaMalloc device output failed!");
 		goto Error;
 	}
+
+	// Allocate GPU memory for input array
 	cudaStatus = cudaMalloc((void**)&dev_input, GAME_DIMENSION * GAME_DIMENSION * size * sizeof(char));
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaMalloc device input failed!");
@@ -232,17 +218,11 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 		printf("cudaMemcpy 1 host to device failed!");
 		goto Error;
 	}
-	
-	//set up launch parameters
-	//dim3 grid((size - 1) / THREADS + 1, 1, 1);
-	//dim3 threads(THREADS, 1, 1);
 
-	// Launch kernel
+	// Launch kernel!
 	gameSearchKernel << < (size - 1) / THREADS + 1, THREADS >> >(dev_input, dev_output, size, nodes, Max_team, Min_team);
 
-
-	// cudaDeviceSynchronize waits for the kernel to finish, and returns
-	// any errors encountered during the launch.
+	// cudaDeviceSynchronize waits for the kernel to finish, and returns any errors encountered during the launch.
 	cudaStatus = cudaDeviceSynchronize();
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaDeviceSynchronize returned error code %d after launching gameSearchKernel!\n", cudaStatus);
@@ -255,16 +235,14 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 		goto Error;
 	}
 
-
 	// Copy output from GPU buffer to host memory.
 	cudaStatus = cudaMemcpy(hostOutput, dev_output, 3* size * sizeof(int), cudaMemcpyDeviceToHost);
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaMemcpy 2 device to host failed!");
 		goto Error;
 	}
-	//for (int i = 0; i < 100; i++)
-		//cout << hostOutput[i] << " ";
-	//free memory
+	
+	//free device memory
 	cudaStatus = cudaFree(dev_input);
 	if (cudaStatus != cudaSuccess) {
 		printf("cudaFree input failed!");
@@ -278,92 +256,10 @@ cudaError_t searchHelper(char* input, int size, int nodes, char Max_team, char M
 	return cudaStatus;
 
 Error:
+	//free device memory if we get an error
 	cudaFree(dev_input);
 	cudaFree(dev_output);
 	return cudaStatus;
-}
-
-/*initializes each block in the game*/
-void setup_game(int x)
-{
-	int deviceValues[GAME_DIMENSION*GAME_DIMENSION];
-	for (int i = 0; i < GAME_DIMENSION; i++)
-	{
-		for (int j = 0; j < GAME_DIMENSION; j++)
-		{
-			values[i][j] = gameboard[x][i][j]; //set values for cpu
-			game[i][j] = 'o';
-			deviceValues[i*GAME_DIMENSION + j] = gameboard[x][i][j];
-		}
-	}
-	//set constant memory
-	cudaError_t cudaStatus;
-	cudaStatus = cudaMemcpyToSymbol(Vc, deviceValues, GAME_DIMENSION*GAME_DIMENSION*sizeof(int));
-	if (cudaStatus != cudaSuccess) {
-		printf("cudaMemcpyToSymbol failed!");
-	}
-	blue_time = 0;
-	green_time = 0;
-	blue_score = 0;
-	green_score = 0;
-	blocks_occupied = 0;
-	play_game();
-}
-
-/*outputs gameboard result to a file*/
-void output_game(string filename)
-{
-	ofstream outFile(filename.c_str());
-	if (outFile.is_open())
-	{
-		outFile << "Player Blue took " << blue_time << " milliseconds (" << float(blue_time) / float(GAME_DIMENSION*GAME_DIMENSION/2) << "ms per move)" << endl;
-		outFile << "Player Green took " << green_time << " milliseconds (" << float(green_time) / float(GAME_DIMENSION*GAME_DIMENSION / 2) << "ms per move)" << endl;
-		outFile << "Blue total score: " << blue_score << endl;
-		outFile << "Green total score: " << green_score << endl;
-		if (game_mode != AI)
-		{
-			if (blue_score > green_score)
-				cout << "Blue Wins!" << endl;
-			else if (blue_score < green_score)
-				cout << "Green Wins!" << endl;
-			else
-				cout << "Tie!" << endl;
-			cout << "Blue final score: " << blue_score << endl;
-			cout << "Green final score: " << green_score << endl;
-		}
-		for (int i = 0; i < GAME_DIMENSION; i++)
-		{
-			for (int j = 0; j < GAME_DIMENSION; j++)
-			{
-				if (game[i][j] == 'b')
-				{
-					outFile << 'B';
-					if (game_mode!=AI)
-						cout << 'B';
-				}
-				else if (game[i][j] == 'b')
-				{
-					outFile << 'G';
-					if (game_mode != AI)
-						cout << 'G';
-				}
-				else
-				{
-					outFile << '.';
-					if (game_mode != AI)
-						cout << '.';
-				}
-			}
-			outFile << endl;
-			if (game_mode != AI)
-				cout << endl;
-		}
-		outFile.close();
-	}
-	else
-	{
-		cout << "error opening " << filename << endl;
-	}
 }
 
 /*handles actual playing of the game*/
@@ -395,37 +291,33 @@ void play_game()
 				}
 			}
 			/*check if we need to launch GPU*/
-			if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied >= CPU_END_LIMIT)
+			if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied >= CPU_END_LIMIT && pMode == 1)
 			{
 				kernelLaunchCount++;
 				hostArray = new char[(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2)*GAME_DIMENSION*GAME_DIMENSION]; //allocate memory to store data that needs to be copied to device
 				arrayCount = 0;
 				cudaError_t cudaStatus;
 				double start = clock();
+				/*do first pass which launches the kernel to compute the depth 4 values*/
+				pass = 1;
 				max_val(game_copy, current_team, opponent, 1, x, y); //take turn -- once this function returns x and y will hold location of where to go next
-				 cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2), GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2, current_team, opponent);
+				//cout << endl << arrayCount << endl;
+				cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2), GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2, current_team, opponent);
 				if (cudaStatus != cudaSuccess) {
 					printf("searchHelper failed!");
 				}
-				
+				delete[] hostArray; // free host input array
+
+				/*do second pass which reads values from array filled by kernel*/
+				pass = 2;
+				arrayCount = 0;
+				max_val(game_copy, current_team, opponent, 1, x, y);
+				//cout << endl << arrayCount << endl;
 				double turn_time = (clock() - start);
 				green_time += turn_time;
-				delete[] hostArray; // free array
-				//cudaError_t cudaStatus;
-				//cout << "freeing host Output..." << endl;
+				
+				//free host memory
 				free(hostOutput);
-				//cout << "hostOutput freed" << endl;
-				//if (cudaStatus != cudaSuccess)
-				//{
-				//	printf("cuda free host failed");
-				//}
-				// cudaDeviceReset must be called before exiting in order for profiling and
-				// tracing tools such as Nsight and Visual Profiler to show complete traces.
-				//cudaStatus = cudaDeviceReset();
-				//if (cudaStatus != cudaSuccess) {
-				//	printf("cudaDeviceReset failed!");
-				//}
-
 			}
 			else{
 				double start = clock();
@@ -446,15 +338,29 @@ void play_game()
 				}
 			}
 			/*check if we need to launch GPU*/
-			if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied >= CPU_END_LIMIT)
+			if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied >= CPU_END_LIMIT && pMode == 1)
 			{
+				kernelLaunchCount++;
 				hostArray = new char[(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2)*GAME_DIMENSION*GAME_DIMENSION]; //allocate memory to store data that needs to be copied to device
 				arrayCount = 0;
+				cudaError_t cudaStatus;
 				double start = clock();
+				/*do first pass which launches the kernel to compute the depth 4 values*/
+				pass = 1;
 				max_val(game_copy, current_team, opponent, 1, x, y); //take turn -- once this function returns x and y will hold location of where to go next
+				cudaStatus = searchHelper(hostArray, (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 1)*(GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2), GAME_DIMENSION*GAME_DIMENSION - blocks_occupied - 2, current_team, opponent);
+				if (cudaStatus != cudaSuccess) {
+					printf("searchHelper failed!");
+				}
+				delete[] hostArray; // free host input array
+
+				/*do second pass which reads values from array filled by kernel*/
+				pass = 2;
+				arrayCount = 0;
+				max_val(game_copy, current_team, opponent, 1, x, y);
 				double turn_time = (clock() - start);
 				blue_time += turn_time;
-				delete[] hostArray; // free array
+				free(hostOutput);
 
 			}
 			else{
@@ -606,9 +512,8 @@ void play_game()
 
 int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, int& y)
 {
-	int best = -1000; //best value so far is held here
-	int best_evaluation = -1000; //used for evaluation function
-
+	int best = -10000; //best value so far is held here
+	int bestKernel = -10000;
 	for (int i = 0; i < GAME_DIMENSION; i++)
 	{
 		for (int j = 0; j < GAME_DIMENSION; j++)
@@ -708,49 +613,48 @@ int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 			/*perform evaluation function since depth limit reached*/
 			else if (depth == CPU_DEPTH_LIMIT)
 			{	
-				int max_total = 0;
-				int min_total = 0;
 				if (game_board[i][j] == 'o')
 				{
-					//MAKE COPY EACH TIME
-					int local_best;
-					char** copy = new char*[GAME_DIMENSION];
-					for (int k = 0; k < GAME_DIMENSION; k++)
+					if (pass == 1)
 					{
-						copy[k] = new char[GAME_DIMENSION];
-					}
-					for (int k = 0; k < GAME_DIMENSION; k++)
-					{
-						for (int m = 0; m < GAME_DIMENSION; m++)
+						//MAKE COPY EACH TIME
+						//int local_best;
+						char** copy = new char*[GAME_DIMENSION];
+						for (int k = 0; k < GAME_DIMENSION; k++)
 						{
-							copy[k][m] = game_board[k][m];
+							copy[k] = new char[GAME_DIMENSION];
 						}
-					}
-					//perform para drop
-					copy[i][j] = Max_team;
-					//check for neighbors
-					if ((i > 0 && copy[i - 1][j] == Max_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team) || (j > 0 && copy[i][j - 1] == Max_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team))
-					{
-						if (i > 0 && copy[i - 1][j] == Min_team)
+						for (int k = 0; k < GAME_DIMENSION; k++)
 						{
-							copy[i - 1][j] = Max_team;
+							for (int m = 0; m < GAME_DIMENSION; m++)
+							{
+								copy[k][m] = game_board[k][m];
+							}
 						}
-						if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team)
+						//perform para drop
+						copy[i][j] = Max_team;
+						//check for neighbors
+						if ((i > 0 && copy[i - 1][j] == Max_team) || (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Max_team) || (j > 0 && copy[i][j - 1] == Max_team) || (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Max_team))
 						{
-							copy[i + 1][j] = Max_team;
+							if (i > 0 && copy[i - 1][j] == Min_team)
+							{
+								copy[i - 1][j] = Max_team;
+							}
+							if (i < GAME_DIMENSION - 1 && copy[i + 1][j] == Min_team)
+							{
+								copy[i + 1][j] = Max_team;
+							}
+							if (j > 0 && copy[i][j - 1] == Min_team)
+							{
+								copy[i][j - 1] = Max_team;
+							}
+							if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team)
+							{
+								copy[i][j + 1] = Max_team;
+							}
 						}
-						if (j > 0 && copy[i][j - 1] == Min_team)
-						{
-							copy[i][j - 1] = Max_team;
-						}
-						if (j < GAME_DIMENSION - 1 && copy[i][j + 1] == Min_team)
-						{
-							copy[i][j + 1] = Max_team;
-						}
-					}
-					/*copy into host array so device can handle the next level*/
-					if (GAME_DIMENSION*GAME_DIMENSION - blocks_occupied >= CPU_END_LIMIT)
-					{
+						/*copy into host array so device can handle the next level*/
+
 						for (int ii = 0; ii < GAME_DIMENSION; ii++)
 						{
 							for (int jj = 0; jj < GAME_DIMENSION; jj++)
@@ -759,35 +663,26 @@ int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 							}
 						}
 						arrayCount++;
-					}
-					/*add up all current values on board of max_team and min_team and compute the difference*/
-					for (int k = 0; k < GAME_DIMENSION; k++)
-					{
-						for (int m = 0; m < GAME_DIMENSION; m++)
+						//memory cleanup
+						for (int k = 0; k < GAME_DIMENSION; k++)
 						{
-							if (copy[k][m] == Max_team)
-							{
-								max_total += values[k][m];
-							}
-							else if (copy[k][m] == Min_team)
-							{
-								min_total += values[k][m];
-							}
+							delete[] copy[k];
 						}
+						delete[] copy;
 					}
-					local_best = max_total - min_total;
-					if (local_best > best_evaluation)
+					/*second pass so read in values from memory filled by kernel, set x and y coordinates, and return value*/
+					else
 					{
-						best_evaluation = local_best;
-						x = j;
-						y = i;
+						int localKernel = hostOutput[arrayCount * 3];
+						//cout << bestKernel << " " << x << " " << y << "    ";
+						if (localKernel > bestKernel)
+						{
+							bestKernel = localKernel;
+							y = hostOutput[arrayCount * 3 + 1];
+							x = hostOutput[arrayCount * 3 + 2];
+						}
+						arrayCount++;
 					}
-					//memory cleanup
-					for (int k = 0; k < GAME_DIMENSION; k++)
-					{
-						delete[] copy[k];
-					}
-					delete[] copy;
 				}
 			}
 		}
@@ -798,7 +693,7 @@ int max_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 	}
 	else
 	{
-		return best_evaluation;
+		return bestKernel;
 	}
 
 }
@@ -990,6 +885,89 @@ int min_val(char** game_board, char Max_team, char Min_team, int depth, int& x, 
 	}
 }
 
+/*initializes each block in the game*/
+void setup_game(int x)
+{
+	int deviceValues[GAME_DIMENSION*GAME_DIMENSION];
+	for (int i = 0; i < GAME_DIMENSION; i++)
+	{
+		for (int j = 0; j < GAME_DIMENSION; j++)
+		{
+			values[i][j] = gameboard[x][i][j]; //set values for cpu
+			game[i][j] = 'o';
+			deviceValues[i*GAME_DIMENSION + j] = gameboard[x][i][j];
+		}
+	}
+	//set constant memory
+	cudaError_t cudaStatus;
+	cudaStatus = cudaMemcpyToSymbol(Vc, deviceValues, GAME_DIMENSION*GAME_DIMENSION*sizeof(int));
+	if (cudaStatus != cudaSuccess) {
+		printf("cudaMemcpyToSymbol failed!");
+	}
+	blue_time = 0;
+	green_time = 0;
+	blue_score = 0;
+	green_score = 0;
+	blocks_occupied = 0;
+	play_game();
+}
+
+/*outputs gameboard result to a file*/
+void output_game(string filename)
+{
+	ofstream outFile(filename.c_str());
+	if (outFile.is_open())
+	{
+		outFile << "Player Blue took " << blue_time << " milliseconds (" << float(blue_time) / float(GAME_DIMENSION*GAME_DIMENSION / 2) << "ms per move)" << endl;
+		outFile << "Player Green took " << green_time << " milliseconds (" << float(green_time) / float(GAME_DIMENSION*GAME_DIMENSION / 2) << "ms per move)" << endl;
+		outFile << "Blue total score: " << blue_score << endl;
+		outFile << "Green total score: " << green_score << endl;
+		if (game_mode != AI)
+		{
+			if (blue_score > green_score)
+				cout << "Blue Wins!" << endl;
+			else if (blue_score < green_score)
+				cout << "Green Wins!" << endl;
+			else
+				cout << "Tie!" << endl;
+			cout << "Blue final score: " << blue_score << endl;
+			cout << "Green final score: " << green_score << endl;
+		}
+		for (int i = 0; i < GAME_DIMENSION; i++)
+		{
+			for (int j = 0; j < GAME_DIMENSION; j++)
+			{
+				if (game[i][j] == 'b')
+				{
+					outFile << 'B';
+					if (game_mode != AI)
+						cout << 'B';
+				}
+				else if (game[i][j] == 'g')
+				{
+					outFile << 'G';
+					if (game_mode != AI)
+						cout << 'G';
+				}
+				else
+				{
+					outFile << '.';
+					if (game_mode != AI)
+						cout << '.';
+				}
+			}
+			outFile << endl;
+			if (game_mode != AI)
+				cout << endl;
+		}
+		outFile.close();
+	}
+	else
+	{
+		cout << "error opening " << filename << endl;
+	}
+}
+
 int main()
 {
 	cudaError_t cudaStatus = cudaSetDevice(0);
@@ -1087,7 +1065,7 @@ int main()
 	endTime = clock();
 	programTime = (endTime - startTime) / 1000;
 	cout << kernelLaunchCount << endl;
-	cout << "Process Execution Time " << programTime << "s" << endl;
+	cout << "Process Execution Time " << programTime << "s" << endl; //output time taken to run program
 	cin.ignore();
 	cin.get(); // pause program to view results
 	return 0;

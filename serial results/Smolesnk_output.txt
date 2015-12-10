@@ -1,0 +1,10 @@
+Player Blue took 58712 milliseconds (3261.78ms per move)
+Player Green took 51075 milliseconds (2837.5ms per move)
+Blue total score: 1334
+Green total score: 319
+BBBBGG
+BBBBGG
+BBGBBG
+BBGBGG
+BBBBGG
+BBBBBG
